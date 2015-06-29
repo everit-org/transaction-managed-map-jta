@@ -1,7 +1,7 @@
 package org.everit.transaction.managed.map.jta;
 
-import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -101,6 +101,13 @@ public class ManagedMap<K, V> implements Map<K, V> {
     }
   }
 
+  protected static class LockWithCount {
+
+    public int count = 0;
+
+    public Lock lock = new ReentrantLock();
+  }
+
   /**
    * Stores the temporary changes of the Map that might be applied in the end of the transaciton.
    * Copied from 2-SNAPSHOT version of Apache Commons Transaction and modified.
@@ -185,7 +192,7 @@ public class ManagedMap<K, V> implements Map<K, V> {
 
     @Override
     public boolean containsValue(final Object value) {
-      return values().contains(value);
+      throw new UnsupportedOperationException();
     }
 
     @Override
@@ -300,18 +307,7 @@ public class ManagedMap<K, V> implements Map<K, V> {
 
     @Override
     public Collection<V> values() {
-      // XXX expensive :(
-      Collection<V> values = new ArrayList<V>();
-      Set<K> keys = keySet();
-      for (K key : keys) {
-        V value = get(key);
-        // XXX we have no isolation, so entry might have been
-        // deleted in the meantime
-        if (value != null) {
-          values.add(value);
-        }
-      }
-      return values;
+      throw new UnsupportedOperationException();
     }
 
   }
@@ -391,9 +387,10 @@ public class ManagedMap<K, V> implements Map<K, V> {
 
   protected ThreadLocal<MapTxContext> activeTx = new ThreadLocal<>();
 
-  protected final Map<Transaction, Boolean> enlistedTransactions = new WeakHashMap<>();
+  protected final Map<Transaction, Map<K, Lock>> enlistedTransactions =
+      new WeakHashMap<>();
 
-  protected Map<K, Lock> locksByKeys = new HashMap<>();
+  protected Map<K, LockWithCount> lockByKey = new HashMap<>();
 
   protected final XAResource mapXAResource = new MapXAResource();
 
@@ -468,6 +465,21 @@ public class ManagedMap<K, V> implements Map<K, V> {
     return activeTx.get();
   }
 
+  protected synchronized Lock getLockInfoByKeyAndIncrementCount(final K key) {
+    LockWithCount lockWithCount = lockByKey.get(key);
+    if (lockWithCount == null) {
+      if (!containsKey(key)) {
+        return null;
+      }
+      lockWithCount = new LockWithCount();
+      lockWithCount.count++;
+      lockByKey.put(key, lockWithCount);
+    } else {
+      lockWithCount.count++;
+    }
+    return lockWithCount.lock;
+  }
+
   /**
    * Checks if the Map is associated to a transaction and manages its context based on the current
    * Transaction state.
@@ -493,8 +505,8 @@ public class ManagedMap<K, V> implements Map<K, V> {
         if (transactionOfWrappedMap == null
             || !transactionOfWrappedMap.equals(currentTransaction)) {
 
-          Boolean enlisted = enlistedTransactions.get(currentTransaction);
-          if (enlisted != null) {
+          Map<K, Lock> enlisgedIfNotNull = enlistedTransactions.get(currentTransaction);
+          if (enlisgedIfNotNull != null) {
             resumeTransaction(currentTransaction);
             transactionOfWrappedMapTL.set(currentTransaction);
           } else {
@@ -505,7 +517,7 @@ public class ManagedMap<K, V> implements Map<K, V> {
             }
             transactionOfWrappedMapTL.set(currentTransaction);
             startTransaction();
-            enlistedTransactions.put(currentTransaction, true);
+            enlistedTransactions.put(currentTransaction, Collections.emptyMap());
           }
         }
         return currentTransaction;
@@ -523,6 +535,10 @@ public class ManagedMap<K, V> implements Map<K, V> {
     return coalesceActiveTxOrWrapped().isEmpty();
   }
 
+  protected synchronized void kCountByKey(final K key) {
+
+  }
+
   @Override
   public Set<K> keySet() {
     handleTransactionState();
@@ -530,36 +546,33 @@ public class ManagedMap<K, V> implements Map<K, V> {
   }
 
   public boolean lockByKey(final K key) {
-    Transaction transaction;
-    try {
-      if (transactionManager.getStatus() == Status.STATUS_NO_TRANSACTION) {
-        throw new IllegalStateException("There must be an active transaction to lock by key");
-      }
-      transaction = transactionManager.getTransaction();
-    } catch (SystemException e) {
-      throw new UncheckedSystemException(e);
+    Transaction transaction = handleTransactionState();
+    if (transaction == null) {
+      throw new IllegalStateException("There must be an active transaction to lock by key");
     }
 
     Lock lock = wrappedRWLock.writeLock();
     lock.lock();
     try {
-      Lock lockOfKey = locksByKeys.get(key);
-
-      if (lockOfKey == null) {
-        boolean containsKey = containsKey(key);
-        if (!containsKey) {
-          return false;
-        }
-        lockOfKey = new ReentrantLock();
-        locksByKeys.put(key, lockOfKey);
-        lockOfKey.lock();
-      }
+      Lock keyLock = getLockInfoByKeyAndIncrementCount(key);
 
       // TODO
 
       return true;
     } finally {
       lock.unlock();
+    }
+  }
+
+  protected Lock lockKey(final K key) {
+    Lock lock = getLockInfoByKeyAndIncrementCount(key);
+    if (lock == null) {
+      return null;
+    }
+
+    lock.lock();
+    if (!containsKey(key)) {
+
     }
   }
 
@@ -624,8 +637,7 @@ public class ManagedMap<K, V> implements Map<K, V> {
 
   @Override
   public Collection<V> values() {
-    handleTransactionState();
-    return coalesceActiveTxOrWrapped().values();
+    throw new UnsupportedOperationException();
   }
 
 }
