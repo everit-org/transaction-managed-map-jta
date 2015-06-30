@@ -28,7 +28,7 @@
   </parent>
 
   <groupId>org.everit.transaction</groupId>
-  <artifactId>org.everit.transaction.managed.map.jta</artifactId>
+  <artifactId>org.everit.transaction.map.managed</artifactId>
   <version>1.0.0-SNAPSHOT</version>
 
   <packaging>bundle</packaging>
@@ -105,6 +105,17 @@
       <groupId>org.everit.transaction</groupId>
       <artifactId>org.everit.transaction.unchecked</artifactId>
       <version>1.0.0</version>
+    </dependency>
+    <dependency>
+      <groupId>org.everit.transaction</groupId>
+      <artifactId>org.everit.transaction.map.api</artifactId>
+      <version>1.0.0-SNAPSHOT</version>
+    </dependency>
+    <dependency>
+      <groupId>org.everit.transaction</groupId>
+      <artifactId>org.everit.transaction.map.readcommited</artifactId>
+      <version>1.0.0-SNAPSHOT</version>
+      <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>org.apache.geronimo.components</groupId>

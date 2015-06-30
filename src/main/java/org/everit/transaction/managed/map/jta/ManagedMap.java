@@ -1,18 +1,11 @@
 package org.everit.transaction.managed.map.jta;
 
 import java.util.Collection;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.WeakHashMap;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-import java.util.concurrent.locks.ReentrantReadWriteLock.WriteLock;
 
 import javax.transaction.RollbackException;
 import javax.transaction.Status;
@@ -23,7 +16,7 @@ import javax.transaction.xa.XAException;
 import javax.transaction.xa.XAResource;
 import javax.transaction.xa.Xid;
 
-import org.everit.transaction.managed.map.jta.internal.RWLockedMap;
+import org.everit.transaction.map.TransactionalMap;
 import org.everit.transaction.unchecked.UncheckedRollbackException;
 import org.everit.transaction.unchecked.UncheckedSystemException;
 
@@ -101,217 +94,6 @@ public class ManagedMap<K, V> implements Map<K, V> {
     }
   }
 
-  protected static class LockWithCount {
-
-    public int count = 0;
-
-    public Lock lock = new ReentrantLock();
-  }
-
-  /**
-   * Stores the temporary changes of the Map that might be applied in the end of the transaciton.
-   * Copied from 2-SNAPSHOT version of Apache Commons Transaction and modified.
-   */
-  protected class MapTxContext implements Map<K, V> {
-    protected Map<K, V> adds;
-
-    protected Map<K, V> changes;
-
-    protected boolean cleared;
-
-    protected Set<K> deletes;
-
-    protected boolean readOnly = true;
-
-    /**
-     * Constructor.
-     */
-    public MapTxContext() {
-      deletes = new HashSet<K>();
-      changes = new HashMap<K, V>();
-      adds = new HashMap<K, V>();
-      cleared = false;
-    }
-
-    @Override
-    public void clear() {
-      readOnly = false;
-      cleared = true;
-      deletes.clear();
-      changes.clear();
-      adds.clear();
-    }
-
-    /**
-     * Writes the temporary changes back to the Map.
-     */
-    public void commit() {
-      WriteLock writeLock = wrappedRWLock.writeLock();
-      writeLock.lock();
-      try {
-        if (!isReadOnly()) {
-
-          if (cleared) {
-            wrapped.clear();
-          }
-
-          wrapped.putAll(changes);
-          wrapped.putAll(adds);
-
-          for (Object key : deletes) {
-            wrapped.remove(key);
-          }
-        }
-      } finally {
-        writeLock.unlock();
-      }
-    }
-
-    @Override
-    public boolean containsKey(final Object key) {
-      if (deletes.contains(key)) {
-        // reflects that entry has been deleted in this tx
-        return false;
-      }
-
-      if (changes.containsKey(key)) {
-        return true;
-      }
-
-      if (adds.containsKey(key)) {
-        return true;
-      }
-
-      if (cleared) {
-        return false;
-      } else {
-        // not modified in this tx
-        return wrapped.containsKey(key);
-      }
-    }
-
-    @Override
-    public boolean containsValue(final Object value) {
-      throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public Set<Entry<K, V>> entrySet() {
-      Set<Entry<K, V>> entrySet = new HashSet<>();
-      // XXX expensive :(
-      for (K key : keySet()) {
-        V value = get(key);
-        // XXX we have no isolation, so get entry might have been
-        // deleted in the meantime
-        if (value != null) {
-          entrySet.add(new HashEntry<K, V>(key, value));
-        }
-      }
-      return entrySet;
-    }
-
-    @Override
-    public V get(final Object key) {
-
-      if (deletes.contains(key)) {
-        // reflects that entry has been deleted in this tx
-        return null;
-      }
-
-      if (changes.containsKey(key)) {
-        return changes.get(key);
-      }
-
-      if (adds.containsKey(key)) {
-        return adds.get(key);
-      }
-
-      if (cleared) {
-        return null;
-      } else {
-        // not modified in this tx
-        return wrapped.get(key);
-      }
-    }
-
-    @Override
-    public boolean isEmpty() {
-      return (size() == 0);
-    }
-
-    public boolean isReadOnly() {
-      return readOnly;
-    }
-
-    @Override
-    public Set<K> keySet() {
-      Set<K> keySet = new HashSet<K>();
-      if (!cleared) {
-        keySet.addAll(wrapped.keySet());
-        keySet.removeAll(deletes);
-      }
-      keySet.addAll(adds.keySet());
-      return keySet;
-    }
-
-    @Override
-    public V put(final K key, final V value) {
-      readOnly = false;
-
-      V oldValue = get(key);
-
-      deletes.remove(key);
-      if (wrapped.containsKey(key)) {
-        changes.put(key, value);
-      } else {
-        adds.put(key, value);
-      }
-
-      return oldValue;
-    }
-
-    @Override
-    public void putAll(final Map<? extends K, ? extends V> map) {
-      for (Object name : map.entrySet()) {
-        @SuppressWarnings({ "rawtypes", "unchecked" })
-        Map.Entry<K, V> entry = (Map.Entry) name;
-        put(entry.getKey(), entry.getValue());
-      }
-    }
-
-    @Override
-    public V remove(final Object key) {
-      V oldValue = get(key);
-
-      readOnly = false;
-      changes.remove(key);
-      adds.remove(key);
-      if (wrapped.containsKey(key) && !cleared) {
-        @SuppressWarnings("unchecked")
-        K typedKey = (K) key;
-        deletes.add(typedKey);
-      }
-
-      return oldValue;
-    }
-
-    @Override
-    public int size() {
-      int size = (cleared ? 0 : wrapped.size());
-
-      size -= deletes.size();
-      size += adds.size();
-
-      return size;
-    }
-
-    @Override
-    public Collection<V> values() {
-      throw new UnsupportedOperationException();
-    }
-
-  }
-
   /**
    * XAResource to manage the map.
    */
@@ -322,8 +104,7 @@ public class ManagedMap<K, V> implements Map<K, V> {
     @Override
     public void commit(final Xid xid, final boolean onePhase) throws XAException {
       Transaction transaction = handleTransactionState();
-      getActiveTx().commit();
-      setActiveTx(null);
+      wrapped.commitTransaction();
       transactionOfWrappedMapTL.set(null);
       enlistedTransactions.remove(transaction);
     }
@@ -369,7 +150,7 @@ public class ManagedMap<K, V> implements Map<K, V> {
     @Override
     public void rollback(final Xid xid) throws XAException {
       Transaction transaction = handleTransactionState();
-      setActiveTx(null);
+      wrapped.rollbackTransaction();
       transactionOfWrappedMapTL.set(null);
       enlistedTransactions.remove(transaction);
     }
@@ -385,99 +166,64 @@ public class ManagedMap<K, V> implements Map<K, V> {
 
   }
 
-  protected ThreadLocal<MapTxContext> activeTx = new ThreadLocal<>();
-
-  protected final Map<Transaction, Map<K, Lock>> enlistedTransactions =
+  protected final Map<Transaction, Boolean> enlistedTransactions =
       new WeakHashMap<>();
 
-  protected Map<K, LockWithCount> lockByKey = new HashMap<>();
-
   protected final XAResource mapXAResource = new MapXAResource();
-
-  protected final Map<Object, MapTxContext> suspendedTXContexts = new ConcurrentHashMap<>();
 
   protected final TransactionManager transactionManager;
 
   protected final ThreadLocal<Transaction> transactionOfWrappedMapTL = new ThreadLocal<>();
 
-  protected final Map<K, V> wrapped;
+  protected final TransactionalMap<K, V> wrapped;
 
   protected final ReentrantReadWriteLock wrappedRWLock = new ReentrantReadWriteLock();
-
-  public ManagedMap(final TransactionManager transactionManager) {
-    this(transactionManager, null);
-  }
 
   /**
    * Constructor.
    *
+   * @param transactionalMap
+   *          The Map that should is managed by this class.
    * @param transactionManager
    *          The JTA transaction manager.
-   * @param wrapped
-   *          The Map that should is managed by this class.
    */
-  public ManagedMap(final TransactionManager transactionManager,
-      final Map<K, V> wrapped) {
+  public ManagedMap(final TransactionalMap<K, V> transactionalMap,
+      final TransactionManager transactionManager) {
+    Objects.requireNonNull(transactionManager);
+    Objects.requireNonNull(transactionalMap);
     this.transactionManager = transactionManager;
-    if (wrapped != null) {
-      this.wrapped = new RWLockedMap<>(wrapped, wrappedRWLock);
-    } else {
-      this.wrapped = new RWLockedMap<>(new HashMap<>(), wrappedRWLock);
-    }
+    this.wrapped = transactionalMap;
+
   }
 
   @Override
   public void clear() {
     handleTransactionState();
-    coalesceActiveTxOrWrapped().clear();
-  }
-
-  protected Map<K, V> coalesceActiveTxOrWrapped() {
-    ManagedMap<K, V>.MapTxContext txContext = getActiveTx();
-    return (txContext != null) ? txContext : wrapped;
+    wrapped.clear();
   }
 
   @Override
   public boolean containsKey(final Object key) {
     handleTransactionState();
-    return coalesceActiveTxOrWrapped().containsKey(key);
+    return wrapped.containsKey(key);
   }
 
   @Override
   public boolean containsValue(final Object value) {
     handleTransactionState();
-    return coalesceActiveTxOrWrapped().containsValue(value);
+    return wrapped.containsValue(value);
   }
 
   @Override
   public Set<Entry<K, V>> entrySet() {
     handleTransactionState();
-    return coalesceActiveTxOrWrapped().entrySet();
+    return wrapped.entrySet();
   }
 
   @Override
   public V get(final Object key) {
     handleTransactionState();
-    return coalesceActiveTxOrWrapped().get(key);
-  }
-
-  protected MapTxContext getActiveTx() {
-    return activeTx.get();
-  }
-
-  protected synchronized Lock getLockInfoByKeyAndIncrementCount(final K key) {
-    LockWithCount lockWithCount = lockByKey.get(key);
-    if (lockWithCount == null) {
-      if (!containsKey(key)) {
-        return null;
-      }
-      lockWithCount = new LockWithCount();
-      lockWithCount.count++;
-      lockByKey.put(key, lockWithCount);
-    } else {
-      lockWithCount.count++;
-    }
-    return lockWithCount.lock;
+    return wrapped.get(key);
   }
 
   /**
@@ -492,22 +238,22 @@ public class ManagedMap<K, V> implements Map<K, V> {
       if (status == Status.STATUS_NO_TRANSACTION) {
         Transaction transactionOfWrappedMap = transactionOfWrappedMapTL.get();
         if (transactionOfWrappedMap != null) {
-          suspendTransaction(transactionOfWrappedMap);
+          wrapped.suspendTransaction();
         }
       } else {
         Transaction transactionOfWrappedMap = transactionOfWrappedMapTL.get();
         Transaction currentTransaction = transactionManager.getTransaction();
         if (transactionOfWrappedMap != null
             && !transactionOfWrappedMap.equals(currentTransaction)) {
-          suspendTransaction(transactionOfWrappedMap);
+          wrapped.suspendTransaction();
         }
 
         if (transactionOfWrappedMap == null
             || !transactionOfWrappedMap.equals(currentTransaction)) {
 
-          Map<K, Lock> enlisgedIfNotNull = enlistedTransactions.get(currentTransaction);
+          Boolean enlisgedIfNotNull = enlistedTransactions.get(currentTransaction);
           if (enlisgedIfNotNull != null) {
-            resumeTransaction(currentTransaction);
+            wrapped.resumeTransaction(currentTransaction);
             transactionOfWrappedMapTL.set(currentTransaction);
           } else {
             try {
@@ -516,8 +262,8 @@ public class ManagedMap<K, V> implements Map<K, V> {
               throw new UncheckedRollbackException(e);
             }
             transactionOfWrappedMapTL.set(currentTransaction);
-            startTransaction();
-            enlistedTransactions.put(currentTransaction, Collections.emptyMap());
+            wrapped.startTransaction(currentTransaction);
+            enlistedTransactions.put(currentTransaction, Boolean.TRUE);
           }
         }
         return currentTransaction;
@@ -532,7 +278,7 @@ public class ManagedMap<K, V> implements Map<K, V> {
   @Override
   public boolean isEmpty() {
     handleTransactionState();
-    return coalesceActiveTxOrWrapped().isEmpty();
+    return wrapped.isEmpty();
   }
 
   protected synchronized void kCountByKey(final K key) {
@@ -542,102 +288,37 @@ public class ManagedMap<K, V> implements Map<K, V> {
   @Override
   public Set<K> keySet() {
     handleTransactionState();
-    return coalesceActiveTxOrWrapped().keySet();
-  }
-
-  public boolean lockByKey(final K key) {
-    Transaction transaction = handleTransactionState();
-    if (transaction == null) {
-      throw new IllegalStateException("There must be an active transaction to lock by key");
-    }
-
-    Lock lock = wrappedRWLock.writeLock();
-    lock.lock();
-    try {
-      Lock keyLock = getLockInfoByKeyAndIncrementCount(key);
-
-      // TODO
-
-      return true;
-    } finally {
-      lock.unlock();
-    }
-  }
-
-  protected Lock lockKey(final K key) {
-    Lock lock = getLockInfoByKeyAndIncrementCount(key);
-    if (lock == null) {
-      return null;
-    }
-
-    lock.lock();
-    if (!containsKey(key)) {
-
-    }
+    return wrapped.keySet();
   }
 
   @Override
   public V put(final K key, final V value) {
     handleTransactionState();
-    return coalesceActiveTxOrWrapped().put(key, value);
+    return wrapped.put(key, value);
   }
 
   @Override
   public void putAll(final Map<? extends K, ? extends V> m) {
     handleTransactionState();
-    coalesceActiveTxOrWrapped().putAll(m);
+    wrapped.putAll(m);
   }
 
   @Override
   public V remove(final Object key) {
     handleTransactionState();
-    return coalesceActiveTxOrWrapped().remove(key);
-  }
-
-  /**
-   * Resumes a transaction that was previously suspended.
-   *
-   * @param currentTransaction
-   *          The transaction to resume.
-   * @throws NullPointerException
-   *           if there is no suspended transaction registered.
-   */
-  protected void resumeTransaction(final Transaction currentTransaction) {
-    MapTxContext txContext = suspendedTXContexts.remove(currentTransaction);
-    Objects.requireNonNull(txContext);
-    setActiveTx(txContext);
-  }
-
-  protected void setActiveTx(final MapTxContext mapContext) {
-    activeTx.set(mapContext);
+    return wrapped.remove(key);
   }
 
   @Override
   public int size() {
     handleTransactionState();
-    return coalesceActiveTxOrWrapped().size();
-  }
-
-  protected void startTransaction() {
-    setActiveTx(new MapTxContext());
-  }
-
-  /**
-   * Suspends the context for a specific transaction.
-   *
-   * @param transactionOfWrappedMap
-   *          The transaction that is currently mapped to the Map context.
-   */
-  protected void suspendTransaction(final Transaction transactionOfWrappedMap) {
-    MapTxContext activeTx = getActiveTx();
-    Objects.requireNonNull(activeTx, "No active map context for transaction.");
-    suspendedTXContexts.put(transactionOfWrappedMap, activeTx);
-    setActiveTx(null);
+    return wrapped.size();
   }
 
   @Override
   public Collection<V> values() {
-    throw new UnsupportedOperationException();
+    handleTransactionState();
+    return wrapped.values();
   }
 
 }
