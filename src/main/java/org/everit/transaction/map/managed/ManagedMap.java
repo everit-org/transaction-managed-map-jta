@@ -62,6 +62,7 @@ public class ManagedMap<K, V> implements Map<K, V> {
 
     @Override
     public void end(final Xid xid, final int flags) throws XAException {
+      System.out.println("end called " + flags);
       // Do nothing as only commit and fail are handled.
     }
 
@@ -112,6 +113,7 @@ public class ManagedMap<K, V> implements Map<K, V> {
 
     @Override
     public void start(final Xid xid, final int flags) throws XAException {
+      System.out.println("Start called //////////////////" + flags);
     }
 
   }
@@ -222,10 +224,6 @@ public class ManagedMap<K, V> implements Map<K, V> {
   public boolean isEmpty() {
     handleTransactionState();
     return wrapped.isEmpty();
-  }
-
-  protected synchronized void kCountByKey(final K key) {
-
   }
 
   @Override

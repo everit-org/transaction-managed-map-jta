@@ -17,33 +17,74 @@ package org.everit.transaction.map.managed;
 
 import java.util.Map;
 
-import javax.transaction.xa.XAException;
+import javax.naming.NamingException;
+import javax.transaction.SystemException;
+import javax.transaction.TransactionManager;
 
-import org.apache.geronimo.transaction.manager.GeronimoTransactionManager;
 import org.everit.osgi.transaction.helper.api.TransactionHelper;
 import org.everit.osgi.transaction.helper.internal.TransactionHelperImpl;
 import org.everit.transaction.map.readcommited.ReadCommitedTransactionalMap;
-import org.everit.transaction.unchecked.xa.UncheckedXAException;
+import org.everit.transaction.unchecked.UncheckedSystemException;
+import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
+import org.objectweb.jotm.Jotm;
 
 public class ManagedMapTest {
 
+  private Jotm jotm;
+
   private TransactionHelper transactionHelper = null;
 
-  private GeronimoTransactionManager transactionManager;
+  private TransactionManager transactionManager;
+
+  @After
+  public void after() {
+    jotm.stop();
+  }
 
   @Before
   public void before() {
     try {
-      transactionManager = new GeronimoTransactionManager();
-    } catch (XAException e) {
-      throw new UncheckedXAException(e);
+      this.jotm = new Jotm(true, false);
+    } catch (NamingException e) {
+      throw new RuntimeException();
     }
+
+    transactionManager = jotm.getTransactionManager();
+    try {
+      transactionManager.setTransactionTimeout(6000);
+    } catch (SystemException e) {
+      throw new UncheckedSystemException(e);
+    }
+
     TransactionHelperImpl transactionHelperImpl = new TransactionHelperImpl();
     transactionHelperImpl.setTransactionManager(transactionManager);
     this.transactionHelper = transactionHelperImpl;
+
+  }
+
+  @Test
+  public void testRollback() {
+    Map<String, String> managedMap = new ManagedMap<String, String>(
+        new ReadCommitedTransactionalMap<>(null), transactionManager);
+
+    managedMap.put("key0", "value0");
+    transactionHelper.required(() -> {
+      managedMap.put("key1", "value1");
+      try {
+        transactionHelper.requiresNew(() -> {
+          managedMap.put("key1", "otherValue");
+          throw new NumberFormatException();
+        });
+      } catch (NumberFormatException e) {
+        Assert.assertEquals(0, e.getSuppressed().length);
+        Assert.assertEquals("value1", managedMap.get("key1"));
+      }
+      return null;
+    });
+    Assert.assertEquals(2, managedMap.size());
   }
 
   @Test
