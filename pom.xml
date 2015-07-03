@@ -36,7 +36,7 @@
   <description>Transactional Map implementation that enlists itself within a JTA Transaction if available.</description>
 
   <properties>
-    <projectpath>transaction-managed-map-jta</projectpath>
+    <projectpath>transaction-map-managed</projectpath>
     <maven.compiler.source>1.8</maven.compiler.source>
     <maven.compiler.target>1.8</maven.compiler.target>
   </properties>
@@ -83,6 +83,7 @@
           <instructions>
             <Bundle-SymbolicName>${project.artifactId}</Bundle-SymbolicName>
             <Import-Package>
+              org.everit.transaction.map;version="[1.0,2)",
               *
             </Import-Package>
             <Export-Package>

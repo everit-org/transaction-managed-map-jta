@@ -37,7 +37,7 @@ import org.everit.transaction.unchecked.UncheckedSystemException;
 
 /**
  * Map that manages its transactional state by enlisting itself if there is an ongoing transaction.
- * The implementation is based on {@link org.apache.commons.transaction.memory.BasicTxMap}.
+ * The implementation calls the functions of a wrapped {@link TransactionalMap}.
  *
  * @param <K>
  *          the type of keys maintained by this map
@@ -51,9 +51,9 @@ public class ManagedMap<K, V> implements Map<K, V> {
    */
   protected class MapXAResource implements XAResource {
 
-    private static final int DEFAULT_TRANSACTION_TIMEOUT = Integer.MAX_VALUE;
+    public static final int DEFAULT_TRANSACTION_TIMEOUT = Integer.MAX_VALUE;
 
-    private final Transaction transaction;
+    protected final Transaction transaction;
 
     public MapXAResource(final Transaction transaction) {
       this.transaction = transaction;
@@ -61,7 +61,7 @@ public class ManagedMap<K, V> implements Map<K, V> {
 
     @Override
     public void commit(final Xid xid, final boolean onePhase) throws XAException {
-      manageTransactionOnWrapped(transaction);
+      updateTransactionState(transaction);
       wrapped.commitTransaction();
       enlistedTransactions.remove(transaction);
     }
@@ -106,7 +106,7 @@ public class ManagedMap<K, V> implements Map<K, V> {
 
     @Override
     public void rollback(final Xid xid) throws XAException {
-      manageTransactionOnWrapped(transaction);
+      updateTransactionState(transaction);
       wrapped.rollbackTransaction();
       enlistedTransactions.remove(transaction);
     }
@@ -137,11 +137,13 @@ public class ManagedMap<K, V> implements Map<K, V> {
    *          The Map that should is managed by this class.
    * @param transactionManager
    *          The JTA transaction manager.
+   * @throws NullPointerException
+   *           if transactionalMap or transactionManager is null.
    */
   public ManagedMap(final TransactionalMap<K, V> transactionalMap,
       final TransactionManager transactionManager) {
-    Objects.requireNonNull(transactionManager);
-    Objects.requireNonNull(transactionalMap);
+    Objects.requireNonNull(transactionManager, "Transaction manager cannot be null");
+    Objects.requireNonNull(transactionalMap, "Transactional map cannot be null");
     this.transactionManager = transactionManager;
     this.wrapped = transactionalMap;
 
@@ -149,32 +151,68 @@ public class ManagedMap<K, V> implements Map<K, V> {
 
   @Override
   public void clear() {
-    handleTransactionState();
+    updateTransactionState();
     wrapped.clear();
   }
 
   @Override
   public boolean containsKey(final Object key) {
-    handleTransactionState();
+    updateTransactionState();
     return wrapped.containsKey(key);
   }
 
   @Override
   public boolean containsValue(final Object value) {
-    handleTransactionState();
+    updateTransactionState();
     return wrapped.containsValue(value);
   }
 
   @Override
   public Set<Entry<K, V>> entrySet() {
-    handleTransactionState();
+    updateTransactionState();
     return wrapped.entrySet();
   }
 
   @Override
   public V get(final Object key) {
-    handleTransactionState();
+    updateTransactionState();
     return wrapped.get(key);
+  }
+
+  @Override
+  public boolean isEmpty() {
+    updateTransactionState();
+    return wrapped.isEmpty();
+  }
+
+  @Override
+  public Set<K> keySet() {
+    updateTransactionState();
+    return wrapped.keySet();
+  }
+
+  @Override
+  public V put(final K key, final V value) {
+    updateTransactionState();
+    return wrapped.put(key, value);
+  }
+
+  @Override
+  public void putAll(final Map<? extends K, ? extends V> m) {
+    updateTransactionState();
+    wrapped.putAll(m);
+  }
+
+  @Override
+  public V remove(final Object key) {
+    updateTransactionState();
+    return wrapped.remove(key);
+  }
+
+  @Override
+  public int size() {
+    updateTransactionState();
+    return wrapped.size();
   }
 
   /**
@@ -183,14 +221,14 @@ public class ManagedMap<K, V> implements Map<K, V> {
    *
    * @return The transaction that is associated to the Map after return.
    */
-  protected Transaction handleTransactionState() {
+  protected Transaction updateTransactionState() {
     try {
       int status = transactionManager.getStatus();
       if (status == Status.STATUS_NO_TRANSACTION) {
-        manageTransactionOnWrapped(null);
+        updateTransactionState(null);
       } else {
         Transaction currentTransaction = transactionManager.getTransaction();
-        manageTransactionOnWrapped(currentTransaction);
+        updateTransactionState(currentTransaction);
         return currentTransaction;
       }
       return null;
@@ -199,25 +237,13 @@ public class ManagedMap<K, V> implements Map<K, V> {
     }
   }
 
-  @Override
-  public boolean isEmpty() {
-    handleTransactionState();
-    return wrapped.isEmpty();
-  }
-
-  @Override
-  public Set<K> keySet() {
-    handleTransactionState();
-    return wrapped.keySet();
-  }
-
   /**
    * Manages the state of the wrapped {@link TransactionalMap} based on the current transaction.
    *
    * @param currentTransaction
    *          The current transaction.
    */
-  protected void manageTransactionOnWrapped(final Transaction currentTransaction) {
+  protected void updateTransactionState(final Transaction currentTransaction) {
     try {
       if (currentTransaction == null) {
         if (wrapped.getAssociatedTransaction() != null) {
@@ -254,32 +280,8 @@ public class ManagedMap<K, V> implements Map<K, V> {
   }
 
   @Override
-  public V put(final K key, final V value) {
-    handleTransactionState();
-    return wrapped.put(key, value);
-  }
-
-  @Override
-  public void putAll(final Map<? extends K, ? extends V> m) {
-    handleTransactionState();
-    wrapped.putAll(m);
-  }
-
-  @Override
-  public V remove(final Object key) {
-    handleTransactionState();
-    return wrapped.remove(key);
-  }
-
-  @Override
-  public int size() {
-    handleTransactionState();
-    return wrapped.size();
-  }
-
-  @Override
   public Collection<V> values() {
-    handleTransactionState();
+    updateTransactionState();
     return wrapped.values();
   }
 
