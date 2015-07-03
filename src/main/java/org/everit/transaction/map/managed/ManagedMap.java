@@ -53,16 +53,21 @@ public class ManagedMap<K, V> implements Map<K, V> {
 
     private static final int DEFAULT_TRANSACTION_TIMEOUT = Integer.MAX_VALUE;
 
+    private final Transaction transaction;
+
+    public MapXAResource(final Transaction transaction) {
+      this.transaction = transaction;
+    }
+
     @Override
     public void commit(final Xid xid, final boolean onePhase) throws XAException {
-      Transaction transaction = handleTransactionState();
+      manageTransactionOnWrapped(transaction);
       wrapped.commitTransaction();
       enlistedTransactions.remove(transaction);
     }
 
     @Override
     public void end(final Xid xid, final int flags) throws XAException {
-      System.out.println("end called " + flags);
       // Do nothing as only commit and fail are handled.
     }
 
@@ -101,7 +106,7 @@ public class ManagedMap<K, V> implements Map<K, V> {
 
     @Override
     public void rollback(final Xid xid) throws XAException {
-      Transaction transaction = handleTransactionState();
+      manageTransactionOnWrapped(transaction);
       wrapped.rollbackTransaction();
       enlistedTransactions.remove(transaction);
     }
@@ -113,14 +118,11 @@ public class ManagedMap<K, V> implements Map<K, V> {
 
     @Override
     public void start(final Xid xid, final int flags) throws XAException {
-      System.out.println("Start called //////////////////" + flags);
     }
 
   }
 
   protected final Map<Transaction, Boolean> enlistedTransactions = new WeakHashMap<>();
-
-  protected final XAResource mapXAResource = new MapXAResource();
 
   protected final TransactionManager transactionManager;
 
@@ -185,33 +187,10 @@ public class ManagedMap<K, V> implements Map<K, V> {
     try {
       int status = transactionManager.getStatus();
       if (status == Status.STATUS_NO_TRANSACTION) {
-        if (wrapped.getAssociatedTransaction() != null) {
-          wrapped.suspendTransaction();
-        }
+        manageTransactionOnWrapped(null);
       } else {
-        Object transactionOfWrappedMap = wrapped.getAssociatedTransaction();
         Transaction currentTransaction = transactionManager.getTransaction();
-        if (transactionOfWrappedMap != null
-            && !transactionOfWrappedMap.equals(currentTransaction)) {
-          wrapped.suspendTransaction();
-        }
-
-        if (transactionOfWrappedMap == null
-            || !transactionOfWrappedMap.equals(currentTransaction)) {
-
-          Boolean enlisgedIfNotNull = enlistedTransactions.get(currentTransaction);
-          if (enlisgedIfNotNull != null) {
-            wrapped.resumeTransaction(currentTransaction);
-          } else {
-            try {
-              currentTransaction.enlistResource(mapXAResource);
-            } catch (RollbackException e) {
-              throw new UncheckedRollbackException(e);
-            }
-            wrapped.startTransaction(currentTransaction);
-            enlistedTransactions.put(currentTransaction, Boolean.TRUE);
-          }
-        }
+        manageTransactionOnWrapped(currentTransaction);
         return currentTransaction;
       }
       return null;
@@ -230,6 +209,48 @@ public class ManagedMap<K, V> implements Map<K, V> {
   public Set<K> keySet() {
     handleTransactionState();
     return wrapped.keySet();
+  }
+
+  /**
+   * Manages the state of the wrapped {@link TransactionalMap} based on the current transaction.
+   *
+   * @param currentTransaction
+   *          The current transaction.
+   */
+  protected void manageTransactionOnWrapped(final Transaction currentTransaction) {
+    try {
+      if (currentTransaction == null) {
+        if (wrapped.getAssociatedTransaction() != null) {
+          wrapped.suspendTransaction();
+        }
+      } else {
+        Object transactionOfWrappedMap = wrapped.getAssociatedTransaction();
+        if (transactionOfWrappedMap != null
+            && !transactionOfWrappedMap.equals(currentTransaction)) {
+          wrapped.suspendTransaction();
+        }
+
+        if (transactionOfWrappedMap == null
+            || !transactionOfWrappedMap.equals(currentTransaction)) {
+
+          Boolean enlisgedIfNotNull = enlistedTransactions.get(currentTransaction);
+          if (enlisgedIfNotNull != null) {
+            wrapped.resumeTransaction(currentTransaction);
+          } else {
+            try {
+              currentTransaction.enlistResource(new MapXAResource(currentTransaction));
+            } catch (RollbackException e) {
+              throw new UncheckedRollbackException(e);
+            }
+            wrapped.startTransaction(currentTransaction);
+            enlistedTransactions.put(currentTransaction, Boolean.TRUE);
+          }
+        }
+      }
+    } catch (SystemException e) {
+      throw new UncheckedSystemException(e);
+    }
+
   }
 
   @Override
