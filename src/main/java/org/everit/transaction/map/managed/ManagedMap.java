@@ -19,7 +19,7 @@ import java.util.Collection;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.WeakHashMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import javax.transaction.RollbackException;
@@ -122,7 +122,7 @@ public class ManagedMap<K, V> implements Map<K, V> {
 
   }
 
-  protected final Map<Transaction, Boolean> enlistedTransactions = new WeakHashMap<>();
+  protected final Map<Transaction, Boolean> enlistedTransactions = new ConcurrentHashMap<>();
 
   protected final TransactionManager transactionManager;
 
@@ -254,15 +254,14 @@ public class ManagedMap<K, V> implements Map<K, V> {
         if (transactionOfWrappedMap != null
             && !transactionOfWrappedMap.equals(currentTransaction)) {
           wrapped.suspendTransaction();
+          transactionOfWrappedMap = null;
         }
 
-        if (transactionOfWrappedMap == null
-            || !transactionOfWrappedMap.equals(currentTransaction)) {
-
+        if (transactionOfWrappedMap == null) {
           Boolean enlisgedIfNotNull = enlistedTransactions.get(currentTransaction);
           if (enlisgedIfNotNull != null) {
             wrapped.resumeTransaction(currentTransaction);
-          } else {
+          } else if (currentTransaction.getStatus() == Status.STATUS_ACTIVE) {
             try {
               currentTransaction.enlistResource(new MapXAResource(currentTransaction));
             } catch (RollbackException e) {
