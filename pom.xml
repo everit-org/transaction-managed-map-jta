@@ -29,7 +29,7 @@
 
   <groupId>org.everit.transaction</groupId>
   <artifactId>org.everit.transaction.map.managed</artifactId>
-  <version>1.0.1-SNAPSHOT</version>
+  <version>1.0.1</version>
 
   <packaging>bundle</packaging>
   <name>Everit - Transaction Managed Map JTA</name>
